@@ -1,0 +1,31 @@
+logging:
+  level:
+    root: info
+
+spring:
+  profiles:
+    active: dev
+  application:
+    name: gateway
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 172.16.8.102:8848
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    url: jdbc:postgresql://172.16.8.102:5432/postgres
+    username: sa
+    password: 123456
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+jetcache:
+  areaInCacheName: false
+  remote:
+    default:
+      type: redis.lettuce
+      keyConvertor: jackson
+      broadcastChannel: gateway
+      uri: redis://172.16.8.102:6379/
