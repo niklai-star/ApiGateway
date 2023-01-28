@@ -44,7 +44,7 @@
 
     <!-- 控制台输出日志级别 -->
     <root level="info">
-        <appender-ref ref="GELF" />
+<!--        <appender-ref ref="GELF" />-->
         <appender-ref ref="STDOUT" />
     </root>
 </configuration>

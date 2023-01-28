@@ -1,3 +1,6 @@
+server:
+  port: 8088
+
 logging:
   level:
     root: info
@@ -12,20 +15,17 @@ spring:
       discovery:
         server-addr: 172.16.8.102:8848
   datasource:
-    driver-class-name: org.postgresql.Driver
-    url: jdbc:postgresql://172.16.8.102:5432/postgres
-    username: sa
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://172.16.8.102:3306/oauth2
+    username: root
     password: 123456
   jpa:
     hibernate:
       ddl-auto: update
     show-sql: true
-
-jetcache:
-  areaInCacheName: false
-  remote:
-    default:
-      type: redis.lettuce
-      keyConvertor: jackson
-      broadcastChannel: gateway
-      uri: redis://172.16.8.102:6379/
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL57Dialect
+  redis:
+    host: 172.16.8.102
+    port: 6379

@@ -1,13 +1,12 @@
 package com.niklai.apigateway.runner;
 
-import com.alicp.jetcache.CacheLoader;
-import com.alicp.jetcache.CacheManager;
-import com.alicp.jetcache.template.QuickConfig;
-import com.niklai.apigateway.entity.RouteInfo;
-import com.niklai.apigateway.repository.RouteInfoRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.niklai.apigateway.ddd.entity.ApiRoute;
+import com.niklai.apigateway.ddd.service.RouteService;
 import com.niklai.apigateway.utils.CacheUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -18,23 +17,21 @@ import java.util.List;
 public class CacheRunner implements CommandLineRunner {
 
     @Autowired
-    private CacheManager cacheManager;
+    private RedisTemplate<String, String> redisTemplate;
 
     @Autowired
-    private RouteInfoRepository routeInfoRepository;
+    private RouteService routeService;
+
+    @Autowired
+    private ObjectMapper objectMapper;
 
     @Override
     public void run(String... args) throws Exception {
-        cacheManager.getOrCreateCache(
-                QuickConfig.newBuilder(CacheUtils.ROUTE_INFO_LIST_KEY)
-                        .expire(Duration.ofDays(1))
-                        .loader((CacheLoader<String, List<RouteInfo>>) key -> {
-                            Iterable<RouteInfo> routeInfos = routeInfoRepository.findAll();
-                            List<RouteInfo> infos = new ArrayList<>();
-                            routeInfos.forEach(infos::add);
-                            return infos;
-                        })
-                        .build()
-        );
+        List<ApiRoute> routes = routeService.getRoutes();
+        if (routes == null) {
+            routes = new ArrayList<>();
+        }
+
+        redisTemplate.opsForValue().set(CacheUtils.ROUTE_INFO_LIST_KEY, objectMapper.writeValueAsString(routes), Duration.ofDays(1));
     }
 }

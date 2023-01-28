@@ -1,11 +1,15 @@
 package com.niklai.apigateway.route;
 
-import com.alicp.jetcache.CacheManager;
-import com.niklai.apigateway.entity.RouteInfo;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.niklai.apigateway.ddd.entity.ApiRoute;
+import com.niklai.apigateway.jpa.entity.RouteInfo;
 import com.niklai.apigateway.request.ApiRequestBody;
 import com.niklai.apigateway.response.ApiResponseBody;
 import com.niklai.apigateway.utils.ApiGatewayContextHolder;
 import com.niklai.apigateway.utils.CacheUtils;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang.StringUtils;
 import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.factory.rewrite.RewriteFunction;
@@ -14,10 +18,10 @@ import org.springframework.cloud.gateway.route.Route;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
-import org.springframework.util.CollectionUtils;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.server.ResponseStatusException;
@@ -34,23 +38,32 @@ import java.util.function.Predicate;
 
 import static org.springframework.util.CollectionUtils.unmodifiableMultiValueMap;
 
+@Slf4j
 public class DemoRouteLocator implements RouteLocator {
     private static final String API_REQUEST_BODY = "API_REQUEST_BODY";
 
     private final RouteLocatorBuilder routeLocatorBuilder;
 
-    private final CacheManager cacheManager;
+    private final RedisTemplate<String, String> redisTemplate;
 
-    public DemoRouteLocator(RouteLocatorBuilder builder, CacheManager cacheManager) {
+    private final ObjectMapper objectMapper;
+
+    public DemoRouteLocator(RouteLocatorBuilder builder, RedisTemplate<String, String> redisTemplate, ObjectMapper objectMapper) {
         this.routeLocatorBuilder = builder;
-        this.cacheManager = cacheManager;
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
     }
 
     @Override
     public Flux<Route> getRoutes() {
         RouteLocatorBuilder.Builder builder = routeLocatorBuilder.routes();
+        builder = restApiRoute(builder);
+        builder = oauth2Route(builder);
+        return builder.build().getRoutes();
+    }
 
-        builder = builder.route("default",
+    private RouteLocatorBuilder.Builder restApiRoute(RouteLocatorBuilder.Builder builder) {
+        return builder.route("default",
                         predicateSpec -> predicateSpec.path("/route/rest")
                                 .and()
                                 .method(HttpMethod.POST, HttpMethod.PUT)
@@ -77,7 +90,15 @@ public class DemoRouteLocator implements RouteLocator {
                                                 changeRoute()
                                         ))
                                 .uri("http://localhost:8080"));
-        return builder.build().getRoutes();
+    }
+
+    private RouteLocatorBuilder.Builder oauth2Route(RouteLocatorBuilder.Builder builder) {
+        return builder.route("oauth2",
+                predicateSpec -> predicateSpec.path("/oauth2/**")
+                        .and()
+                        .method(HttpMethod.GET, HttpMethod.POST)
+                        .filters(f -> f.rewritePath("/oauth2(?<segment>/?.*)", "$\\{segment}"))
+                        .uri("lb://oauth2"));
     }
 
     private Predicate<ApiRequestBody> readBodyPredicate() {
@@ -86,7 +107,7 @@ public class DemoRouteLocator implements RouteLocator {
                 return false;
             }
 
-            Optional<RouteInfo> infoOptional = getRouteInfo(apiRequestBody.getApi());
+            Optional<ApiRoute> infoOptional = getRouteInfo(apiRequestBody.getApi());
             if (infoOptional.isPresent()) {
                 ApiGatewayContextHolder.get().getAttributes().put("ROUTE", infoOptional.get());
                 return true;
@@ -104,7 +125,7 @@ public class DemoRouteLocator implements RouteLocator {
             }
 
 
-            Optional<RouteInfo> infoOptional = getRouteInfo(request.getQueryParams().getFirst("api"));
+            Optional<ApiRoute> infoOptional = getRouteInfo(request.getQueryParams().getFirst("api"));
             if (infoOptional.isPresent()) {
                 exchange.getAttributes().put("ROUTE", infoOptional.get());
                 return Mono.just(true);
@@ -204,17 +225,24 @@ public class DemoRouteLocator implements RouteLocator {
         };
     }
 
-    private Optional<RouteInfo> getRouteInfo(String api) {
+    private Optional<ApiRoute> getRouteInfo(String api) {
         String[] apiSplit = api.split("\\.");
         if (apiSplit.length <= 2) {
             return Optional.empty();
         }
 
-        List<RouteInfo> routeInfos = (List<RouteInfo>) cacheManager.getCache(CacheUtils.ROUTE_INFO_LIST_KEY).get("");
-        if (CollectionUtils.isEmpty(routeInfos)) {
+        String s = redisTemplate.opsForValue().get(CacheUtils.ROUTE_INFO_LIST_KEY);
+        if (StringUtils.isEmpty(s)) {
             return Optional.empty();
         }
 
-        return routeInfos.stream().filter(routeInfo -> routeInfo.getProject().equals(apiSplit[0]) && routeInfo.getService().equals(apiSplit[1])).findFirst();
+        JavaType javaType = objectMapper.getTypeFactory().constructCollectionType(List.class, ApiRoute.class);
+        try {
+            List<ApiRoute> routes = objectMapper.readValue(s, javaType);
+            return routes.stream().filter(routeInfo -> routeInfo.getProject().equals(apiSplit[0]) && routeInfo.getService().equals(apiSplit[1])).findFirst();
+        } catch (JsonProcessingException e) {
+            log.error(e.getMessage(), e);
+            return Optional.empty();
+        }
     }
 }
