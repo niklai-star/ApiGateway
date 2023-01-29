@@ -2,9 +2,10 @@ package com.niklai.apigateway.route;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.niklai.apigateway.ddd.entity.ApiRoute;
-import com.niklai.apigateway.jpa.entity.RouteInfo;
+import com.niklai.apigateway.error.ApiGatewayException;
 import com.niklai.apigateway.request.ApiRequestBody;
 import com.niklai.apigateway.response.ApiResponseBody;
 import com.niklai.apigateway.utils.ApiGatewayContextHolder;
@@ -20,6 +21,7 @@ import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.cloud.gateway.support.ServerWebExchangeUtils;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.util.LinkedMultiValueMap;
@@ -41,6 +43,8 @@ import static org.springframework.util.CollectionUtils.unmodifiableMultiValueMap
 @Slf4j
 public class DemoRouteLocator implements RouteLocator {
     private static final String API_REQUEST_BODY = "API_REQUEST_BODY";
+
+    private static final String ACCESS_TOKEN_HEADER = "Access-Token";
 
     private final RouteLocatorBuilder routeLocatorBuilder;
 
@@ -72,6 +76,7 @@ public class DemoRouteLocator implements RouteLocator {
                                 .filters(f -> f.modifyRequestBody(ApiRequestBody.class, Object.class, modifyRequestBodyFilterFunction())
                                         .modifyResponseBody(Object.class, ApiResponseBody.class, modifyResponseBodyFilterFunction())
                                         .filters(
+                                                accessToken(),
                                                 customSetPath(),
                                                 changeRoute()
                                         ))
@@ -85,6 +90,7 @@ public class DemoRouteLocator implements RouteLocator {
                                 .filters(f -> f
                                         .modifyResponseBody(Object.class, ApiResponseBody.class, modifyResponseBodyFilterFunction())
                                         .filters(
+                                                accessToken(),
                                                 customSetPath(),
                                                 customRemoveParam("api", "v"),
                                                 changeRoute()
@@ -159,11 +165,11 @@ public class DemoRouteLocator implements RouteLocator {
 
     private GatewayFilter changeRoute() {
         return (exchange, chain) -> {
-            RouteInfo routeInfo = exchange.getAttribute("ROUTE");
+            ApiRoute apiRoute = exchange.getAttribute("ROUTE");
             Route route = Route.async()
-                    .id(routeInfo.getProject() + ":" + routeInfo.getService())
+                    .id(apiRoute.getProject() + ":" + apiRoute.getService())
                     .predicate(serverWebExchange -> true)
-                    .uri(routeInfo.getUri())
+                    .uri(apiRoute.getUri())
                     .build();
             exchange.getAttributes().put(ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR, route);
             return chain.filter(exchange);
@@ -192,6 +198,35 @@ public class DemoRouteLocator implements RouteLocator {
 
             ServerHttpRequest request = req.mutate().path(sb.toString()).build();
             return chain.filter(exchange.mutate().request(request).build());
+        };
+    }
+
+    private GatewayFilter accessToken() {
+        return (exchange, chain) -> {
+            ServerHttpRequest request = exchange.getRequest();
+            if (!request.getHeaders().containsKey(ACCESS_TOKEN_HEADER)) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "无效的AccessToken或已过期");
+            }
+
+            Optional<String> accessTokenOptional = request.getHeaders().get(ACCESS_TOKEN_HEADER).stream().findFirst();
+            if (accessTokenOptional.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "无效的AccessToken或已过期");
+            }
+
+            String s = redisTemplate.opsForValue().get(CacheUtils.accessTokenKey(accessTokenOptional.get()));
+            if (StringUtils.isEmpty(s)) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "无效的AccessToken或已过期");
+            }
+
+            try {
+                JsonNode jsonNode = objectMapper.readTree(s);
+                long id = jsonNode.get("accountId").asLong();
+                ServerHttpRequest.Builder builder = request.mutate().header("Account-Id", String.valueOf(id));
+                return chain.filter(exchange.mutate().request(builder.build()).build());
+            } catch (JsonProcessingException e) {
+                log.error(e.getMessage(), e);
+                throw new ApiGatewayException(String.valueOf(HttpStatus.UNAUTHORIZED.value()), "无效的AccessToken或已过期", e);
+            }
         };
     }
 

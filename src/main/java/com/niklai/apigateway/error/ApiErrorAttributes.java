@@ -18,12 +18,25 @@ public class ApiErrorAttributes extends DefaultErrorAttributes {
 
     @Override
     public Map<String, Object> getErrorAttributes(ServerRequest request, ErrorAttributeOptions options) {
-        Map<String, Object> errorAttributes = new LinkedHashMap();
         Throwable error = this.getError(request);
+        log.error(error.getMessage(), error);
+        if (error instanceof ApiGatewayException) {
+            return apiErrorAttributes((ApiGatewayException) error);
+        }
+
+        Map<String, Object> errorAttributes = new LinkedHashMap();
         MergedAnnotation<ResponseStatus> responseStatusAnnotation = MergedAnnotations.from(error.getClass(), MergedAnnotations.SearchStrategy.TYPE_HIERARCHY).get(ResponseStatus.class);
         HttpStatus errorStatus = error instanceof ResponseStatusException ? ((ResponseStatusException) error).getStatus() : responseStatusAnnotation.getValue("code", HttpStatus.class).orElse(HttpStatus.INTERNAL_SERVER_ERROR);
         errorAttributes.put("code", errorStatus.value());
         errorAttributes.put("msg", errorStatus.getReasonPhrase());
+        errorAttributes.put("data", null);
+        return errorAttributes;
+    }
+
+    private Map<String, Object> apiErrorAttributes(ApiGatewayException ex) {
+        Map<String, Object> errorAttributes = new LinkedHashMap();
+        errorAttributes.put("code", ex.getCode());
+        errorAttributes.put("msg", ex.getMsg());
         errorAttributes.put("data", null);
         return errorAttributes;
     }
